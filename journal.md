@@ -74,6 +74,31 @@ Decision: keep `/tile` and `/plan` around (the PNG-preview tooling uses `/tile`)
 now uses `/render`. `--workers` sets the server default; `?workers=` overrides per request, and
 the `[`/`]` keys change it live so the speedup is something you can feel.
 
+## v2.5 — UX polish
+Loader + done indicator (determinate progress bar over the known tile total + a braille
+spinner + a `✓ N tiles · X ms` line), a visible workers slider (mirrors the `[`/`]` keys), and
+**auto-iterations**: the client scales `max_iter` up with zoom depth
+(`clamp(200 + 40*log2(0.005/scale), 200, 4000)`) and passes it as `?iters=`; the server honors
+it with the `--iters` default as the floor. HUD now shows workers, iters, tiles/total, and ms.
+
+## Two infinities (note to future me)
+When I was adding a "speed" dial I got briefly confused about whether a render could run
+forever, and untangling it is worth remembering:
+
+- **A single frame is finite and always terminates.** Fixed box + fixed pixel resolution = a
+  fixed pixel count, and each pixel runs the escape loop *at most* `max_iter` times. That cap
+  IS the deterministic stopping point. Points in the black interior never escape, so they're
+  the expensive ones — they always run the full `max_iter` before we give up and call them
+  black. No cap would mean they loop forever; the cap is what guarantees termination.
+- **The infinite detail lives only across zoom levels.** You can keep zooming forever and
+  always find new structure (those "infinitely minute black spaces"), but each individual zoom
+  is still one finite frame. The infinity is in the *sequence* of zooms, not inside any frame.
+
+That's the whole reason auto-iterations exists: deeper zoom needs a higher cap or the fine
+black filaments blur into blobs — but every frame still finishes. Pixel size (resolution) sets
+how much of that detail you can even sample; below ~1e-14 scale `float` precision, not
+iterations, is what finally kills the zoom.
+
 ## Next (v3, the multi-market idea)
 Shard the image into k markets, each a queue + worker pool in parallel, then add cross-market
 work-stealing = arbitrage, and instrument per-worker utilization to show why one global auction

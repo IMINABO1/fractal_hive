@@ -41,3 +41,13 @@ Problems we hit and problems we fear. No solutions here — solutions live in `j
   intermediary that buffers the response would defeat progressive fill (fine on localhost).
 - The frontend re-copies the whole stream buffer on every chunk (`new Uint8Array` + `set`);
   O(n^2) in the worst case for very large frames. Fine at current sizes, not for 4K renders.
+
+## v2.5
+### Feared (no fix planned yet)
+- Auto-iterations is capped at 4000, but the real ceiling is lower: past ~1e-14 scale, `float`
+  (double) precision — not iteration count — limits the zoom, so very deep views degrade no
+  matter how high `max_iter` goes. Arbitrary precision (perturbation/rebasing) is the only fix.
+- More iterations = slower renders; the workers slider is the only counterweight, and on this
+  bytecode-only machine there's no native speed to fall back on.
+- The progress bar's total is computed client-side as `ceil(W/TILE)*ceil(H/TILE)`; if the tile
+  size or dimensions ever diverge between client and server the bar would over/under-fill.
