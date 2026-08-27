@@ -39,11 +39,18 @@ let tint_tile bytes (r, g, b) =
     i := !i + 4
   done
 
-let run ~vp ~max_iter ~size ~workers ~markets ~arbitrage ~tint ~emit =
+let run ~vp ~max_iter ~size ~workers ~markets ~arbitrage ~tint ~partition ~emit =
   let k = max 1 (min markets workers) in
   let w = vp.Viewport.w in
   let planned = Auction.plan ~vp ~max_iter (Tile.split ~w ~h:vp.Viewport.h ~size) in
-  let market_of (t, _) = min (k - 1) ((t.Tile.x0 + t.Tile.x1) / 2 * k / w) in
+  (* "band" gives each market a contiguous vertical slice (boundary concentrates in a
+     couple of markets); "strided" interleaves columns so every market gets a mix of
+     hot and cold tiles -- the fair partition to test the arbitrage win against. *)
+  let market_of (t, _) =
+    match partition with
+    | "strided" -> t.Tile.x0 / size mod k
+    | _ -> min (k - 1) ((t.Tile.x0 + t.Tile.x1) / 2 * k / w)
+  in
   let mkts =
     Array.init k (fun m ->
         { queue = Array.of_list (List.filter (fun tb -> market_of tb = m) planned);

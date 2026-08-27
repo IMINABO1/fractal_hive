@@ -49,6 +49,9 @@
       <select id="mkt"><option>1</option><option>2</option><option selected>4</option><option>8</option></select>
     </label>
     <label><input type="checkbox" id="arb" checked> arb</label>
+    <label>part
+      <select id="part"><option value="band" selected>band</option><option value="strided">strided</option></select>
+    </label>
     <button id="bench">benchmark</button>
     <div id="status"><span id="spinner"></span> <span id="stext">idle</span></div>
     <div id="barwrap"><div id="bar"></div></div>
@@ -68,12 +71,14 @@ const wslider = document.getElementById('wslider');
 const wval = document.getElementById('wval');
 const mktSel = document.getElementById('mkt');
 const arbBox = document.getElementById('arb');
+const partSel = document.getElementById('part');
 const graph = document.getElementById('graph');
 
 let view = { cx: -0.5, cy: 0.0, scale: 0.005 };
 let workers = 4;
 let markets = 4;
 let arb = true;
+let part = 'band';
 let curIters = 200;
 let inFlight = null; // AbortController for the current render
 
@@ -126,7 +131,7 @@ async function render() {
   const t0 = performance.now();
   let res;
   try {
-    res = await fetch('/render?' + qs({ tile: TILE, workers, iters: curIters, markets, arb: arb ? 1 : 0, tint: 1 }), { signal: me.signal });
+    res = await fetch('/render?' + qs({ tile: TILE, workers, iters: curIters, markets, arb: arb ? 1 : 0, tint: 1, part }), { signal: me.signal });
   } catch { return; }
   const reader = res.body.getReader();
   let buf = new Uint8Array(0), tiles = 0;
@@ -169,25 +174,30 @@ function setWorkers(n) {
 wslider.addEventListener('input', () => { setWorkers(+wslider.value); render(); });
 mktSel.addEventListener('change', () => { markets = +mktSel.value; render(); });
 arbBox.addEventListener('change', () => { arb = arbBox.checked; render(); });
+partSel.addEventListener('change', () => { part = partSel.value; render(); });
 
-// Benchmark: /stats runs the render twice (siloed vs arbitrage) and returns
-// per-worker utilization; we draw both as bar rows so the idle workers in the
-// siloed row stand out next to the uniformly-busy arbitrage row.
+// Benchmark: /stats runs both partitions x both modes and returns per-worker
+// utilization. We draw two groups (band, strided) each with a siloed and an
+// arbitrage bar row, so the contrast is visible: band's siloed row has idle
+// workers that arbitrage rescues, while a fair strided partition is already
+// near-full even without stealing.
 const bench = document.getElementById('bench');
-function barRow(mode, cls) {
-  const bars = mode.util.map(u =>
+const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+function barRow(m, cls) {
+  const bars = m.util.map(u =>
     `<div class="gbar" style="height:${Math.round(u * 100)}%" title="${(u * 100).toFixed(0)}%"></div>`).join('');
   return `<div class="grow ${cls}">${bars}</div>`;
 }
+function groupHtml(name, g) {
+  const speed = g.siloed.wallMs / g.arbitrage.wallMs;
+  return `<div style="margin-top:8px"><b>${name}</b> · arbitrage ${speed.toFixed(2)}× faster · ` +
+    `util ${(mean(g.siloed.util) * 100).toFixed(0)}% → ${(mean(g.arbitrage.util) * 100).toFixed(0)}%</div>` +
+    `<div class="glabel">siloed · ${g.siloed.wallMs.toFixed(0)} ms</div>` + barRow(g.siloed, 'silo') +
+    `<div class="glabel">arbitrage · ${g.arbitrage.wallMs.toFixed(0)} ms</div>` + barRow(g.arbitrage, 'arb');
+}
 function drawGraph(d) {
-  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
-  const speed = d.siloed.wallMs / d.arbitrage.wallMs;
-  graph.innerHTML =
-    `<div>markets ${d.markets} · workers ${d.workers} · ` +
-    `arbitrage <b>${speed.toFixed(2)}×</b> faster · ` +
-    `utilization ${(mean(d.siloed.util) * 100).toFixed(0)}% → ${(mean(d.arbitrage.util) * 100).toFixed(0)}%</div>` +
-    `<div class="glabel">siloed · ${d.siloed.wallMs.toFixed(0)} ms</div>` + barRow(d.siloed, 'silo') +
-    `<div class="glabel">arbitrage · ${d.arbitrage.wallMs.toFixed(0)} ms</div>` + barRow(d.arbitrage, 'arb');
+  graph.innerHTML = `<div>markets ${d.markets} · workers ${d.workers}</div>` +
+    groupHtml('band (contiguous)', d.band) + groupHtml('strided (interleaved)', d.strided);
 }
 bench.addEventListener('click', async () => {
   graph.textContent = 'benchmarking…';
