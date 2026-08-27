@@ -19,6 +19,10 @@
   #barwrap { flex: 1; height: 6px; background: #1a1a22; border-radius: 3px; overflow: hidden; }
   #bar { height: 100%; width: 0; background: #3b6ea5; transition: width .08s linear; }
   #bar.done { background: #4a9a5a; }
+  #zoombtns button { width: 26px; height: 24px; margin-right: 2px; cursor: pointer;
+                     background: #1a1a22; color: #cfcfe0; border: 1px solid #333;
+                     border-radius: 4px; font-size: 14px; line-height: 1; }
+  #zoombtns button:hover { background: #262631; }
 </style>
 </head>
 <body>
@@ -29,10 +33,15 @@
   <div id="panel">
     <label>workers <b id="wval">4</b></label>
     <input id="wslider" type="range" min="1" max="16" value="4">
+    <span id="zoombtns">
+      <button id="zout" title="zoom out">&minus;</button>
+      <button id="zin" title="zoom in">+</button>
+      <button id="zreset" title="reset view">&#8962;</button>
+    </span>
     <div id="status"><span id="spinner"></span> <span id="stext">idle</span></div>
     <div id="barwrap"><div id="bar"></div></div>
   </div>
-  <p id="help">drag to pan &middot; scroll to zoom &middot; <b>[</b>/<b>]</b> or the slider = workers &middot; iterations auto-scale with zoom</p>
+  <p id="help">drag to pan &middot; scroll or <b>&minus;</b>/<b>+</b> to zoom &middot; <b>&#8962;</b> reset &middot; <b>[</b>/<b>]</b> or slider = workers &middot; iterations auto-scale with zoom</p>
 <script>
 const W = 800, H = 600, TILE = 64;
 const TOTAL = Math.ceil(W / TILE) * Math.ceil(H / TILE);
@@ -141,10 +150,13 @@ function setWorkers(n) {
 
 wslider.addEventListener('input', () => { setWorkers(+wslider.value); render(); });
 
-// [ / ] change the worker count live, so you can watch render time move.
+// [ / ] change workers; + / - / 0 zoom in / out / reset from the keyboard.
 window.addEventListener('keydown', e => {
   if (e.key === '[') { setWorkers(workers - 1); render(); }
   else if (e.key === ']') { setWorkers(workers + 1); render(); }
+  else if (e.key === '=' || e.key === '+') zoomAt(W / 2, H / 2, 0.7);
+  else if (e.key === '-' || e.key === '_') zoomAt(W / 2, H / 2, 1 / 0.7);
+  else if (e.key === '0') resetView();
 });
 
 // Pan: track the drag in screen pixels, shift the center on release.
@@ -160,18 +172,27 @@ window.addEventListener('mouseup', e => {
   render();
 });
 
-// Zoom about the cursor: keep the complex point under the mouse fixed.
-canvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  const factor = e.deltaY < 0 ? 0.8 : 1.25;
-  const mx = e.offsetX, my = e.offsetY;
+// Zoom keeping the complex point under (mx,my) fixed. The wheel passes the
+// cursor; the buttons pass the canvas center.
+function zoomAt(mx, my, factor) {
   const re = view.cx + (mx - W / 2) * view.scale;
   const im = view.cy - (my - H / 2) * view.scale;
   view.scale *= factor;
   view.cx = re - (mx - W / 2) * view.scale;
   view.cy = im + (my - H / 2) * view.scale;
   render();
+}
+
+// Proportional to deltaY so a small trackpad scroll is a small zoom (no jumps).
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoomAt(e.offsetX, e.offsetY, Math.pow(1.0015, e.deltaY));
 }, { passive: false });
+
+function resetView() { view = { cx: -0.5, cy: 0.0, scale: 0.005 }; render(); }
+document.getElementById('zin').addEventListener('click', () => zoomAt(W / 2, H / 2, 0.7));
+document.getElementById('zout').addEventListener('click', () => zoomAt(W / 2, H / 2, 1 / 0.7));
+document.getElementById('zreset').addEventListener('click', resetView);
 
 render();
 </script>
