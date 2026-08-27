@@ -23,6 +23,13 @@
                      background: #1a1a22; color: #cfcfe0; border: 1px solid #333;
                      border-radius: 4px; font-size: 14px; line-height: 1; }
   #zoombtns button:hover { background: #262631; }
+  #panel select, #panel button { background: #1a1a22; color: #cfcfe0; border: 1px solid #333;
+                                 border-radius: 4px; padding: 2px 6px; cursor: pointer; }
+  #graph { width: 800px; margin: 8px auto; font-size: 12px; color: #b9b9cc; }
+  #graph .grow { display: flex; align-items: flex-end; gap: 3px; height: 60px; margin: 2px 0 0; }
+  #graph .gbar { width: 16px; background: #4a9a5a; min-height: 1px; }
+  #graph .grow.silo .gbar { background: #a5533b; }
+  #graph .glabel { color: #9a9ab0; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -38,10 +45,16 @@
       <button id="zin" title="zoom in">+</button>
       <button id="zreset" title="reset view">&#8962;</button>
     </span>
+    <label>markets
+      <select id="mkt"><option>1</option><option>2</option><option selected>4</option><option>8</option></select>
+    </label>
+    <label><input type="checkbox" id="arb" checked> arb</label>
+    <button id="bench">benchmark</button>
     <div id="status"><span id="spinner"></span> <span id="stext">idle</span></div>
     <div id="barwrap"><div id="bar"></div></div>
   </div>
-  <p id="help">drag to pan &middot; scroll or <b>&minus;</b>/<b>+</b> to zoom &middot; <b>&#8962;</b> reset &middot; <b>[</b>/<b>]</b> or slider = workers &middot; iterations auto-scale with zoom</p>
+  <div id="graph"></div>
+  <p id="help">drag to pan &middot; scroll or <b>&minus;</b>/<b>+</b> to zoom &middot; <b>&#8962;</b> reset &middot; <b>[</b>/<b>]</b> or slider = workers &middot; iterations auto-scale with zoom &middot; pick markets + arbitrage, then <b>benchmark</b></p>
 <script>
 const W = 800, H = 600, TILE = 64;
 const TOTAL = Math.ceil(W / TILE) * Math.ceil(H / TILE);
@@ -53,9 +66,14 @@ const spinner = document.getElementById('spinner');
 const stext = document.getElementById('stext');
 const wslider = document.getElementById('wslider');
 const wval = document.getElementById('wval');
+const mktSel = document.getElementById('mkt');
+const arbBox = document.getElementById('arb');
+const graph = document.getElementById('graph');
 
 let view = { cx: -0.5, cy: 0.0, scale: 0.005 };
 let workers = 4;
+let markets = 4;
+let arb = true;
 let curIters = 200;
 let inFlight = null; // AbortController for the current render
 
@@ -108,7 +126,7 @@ async function render() {
   const t0 = performance.now();
   let res;
   try {
-    res = await fetch('/render?' + qs({ tile: TILE, workers, iters: curIters }), { signal: me.signal });
+    res = await fetch('/render?' + qs({ tile: TILE, workers, iters: curIters, markets, arb: arb ? 1 : 0, tint: 1 }), { signal: me.signal });
   } catch { return; }
   const reader = res.body.getReader();
   let buf = new Uint8Array(0), tiles = 0;
@@ -149,6 +167,35 @@ function setWorkers(n) {
 }
 
 wslider.addEventListener('input', () => { setWorkers(+wslider.value); render(); });
+mktSel.addEventListener('change', () => { markets = +mktSel.value; render(); });
+arbBox.addEventListener('change', () => { arb = arbBox.checked; render(); });
+
+// Benchmark: /stats runs the render twice (siloed vs arbitrage) and returns
+// per-worker utilization; we draw both as bar rows so the idle workers in the
+// siloed row stand out next to the uniformly-busy arbitrage row.
+const bench = document.getElementById('bench');
+function barRow(mode, cls) {
+  const bars = mode.util.map(u =>
+    `<div class="gbar" style="height:${Math.round(u * 100)}%" title="${(u * 100).toFixed(0)}%"></div>`).join('');
+  return `<div class="grow ${cls}">${bars}</div>`;
+}
+function drawGraph(d) {
+  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const speed = d.siloed.wallMs / d.arbitrage.wallMs;
+  graph.innerHTML =
+    `<div>markets ${d.markets} · workers ${d.workers} · ` +
+    `arbitrage <b>${speed.toFixed(2)}×</b> faster · ` +
+    `utilization ${(mean(d.siloed.util) * 100).toFixed(0)}% → ${(mean(d.arbitrage.util) * 100).toFixed(0)}%</div>` +
+    `<div class="glabel">siloed · ${d.siloed.wallMs.toFixed(0)} ms</div>` + barRow(d.siloed, 'silo') +
+    `<div class="glabel">arbitrage · ${d.arbitrage.wallMs.toFixed(0)} ms</div>` + barRow(d.arbitrage, 'arb');
+}
+bench.addEventListener('click', async () => {
+  graph.textContent = 'benchmarking…';
+  try {
+    const d = await (await fetch('/stats?' + qs({ tile: TILE, workers, markets, iters: curIters }))).json();
+    drawGraph(d);
+  } catch { graph.textContent = 'benchmark failed'; }
+});
 
 // [ / ] change workers; + / - / 0 zoom in / out / reset from the keyboard.
 window.addEventListener('keydown', e => {

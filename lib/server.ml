@@ -109,11 +109,11 @@ let json_of_plan planned =
   Buffer.contents buf
 
 (* Stream a whole viewport, one framed tile at a time, rendered in parallel by
-   Hive. No Content-Length: the stream ends when the connection closes. Rendering
+   Market. No Content-Length: the stream ends when the connection closes. Rendering
    runs across N domains; the socket write is the only shared step, so a Mutex
    serializes it. A failed write means the client left -> emit returns false and
-   Hive stops. Frame = 16-byte header (x0,y0,x1,y1 as little-endian int32) + RGBA. *)
-let write_render fd ~max_iter ~vp ~size ~workers =
+   Market stops. Frame = 16-byte header (x0,y0,x1,y1 as little-endian int32) + RGBA. *)
+let write_render fd ~max_iter ~vp ~size ~workers ~markets ~arbitrage ~tint =
   send_all fd
     "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n";
   let mtx = Mutex.create () in
@@ -134,7 +134,20 @@ let write_render fd ~max_iter ~vp ~size ~workers =
     Mutex.unlock mtx;
     ok
   in
-  Hive.render ~vp ~max_iter ~size ~workers ~emit
+  ignore (Market.run ~vp ~max_iter ~size ~workers ~markets ~arbitrage ~tint ~emit)
+
+let json_of_stats ~workers ~markets (s0 : Market.stats) (s1 : Market.stats) =
+  let farr a =
+    "[" ^ String.concat "," (Array.to_list (Array.map (Printf.sprintf "%.4f") a)) ^ "]"
+  in
+  let iarr a =
+    "[" ^ String.concat "," (Array.to_list (Array.map string_of_int a)) ^ "]"
+  in
+  let mode (s : Market.stats) =
+    Printf.sprintf {|{"wallMs":%.1f,"util":%s,"tiles":%s}|} s.wall_ms (farr s.util) (iarr s.tiles)
+  in
+  Printf.sprintf {|{"workers":%d,"markets":%d,"siloed":%s,"arbitrage":%s}|}
+    workers markets (mode s0) (mode s1)
 
 let handle_conn ~webroot ~max_iter ~workers fd =
   (try
@@ -164,6 +177,20 @@ let handle_conn ~webroot ~max_iter ~workers fd =
          ~vp
          ~size:(qint params "tile" 64)
          ~workers:(max 1 (qint params "workers" workers))
+         ~markets:(max 1 (qint params "markets" 1))
+         ~arbitrage:(qint params "arb" 1 <> 0)
+         ~tint:(qint params "tint" 1 <> 0)
+     | "/stats" ->
+       let vp = viewport_of_params params in
+       let max_iter = max 1 (qint params "iters" max_iter) in
+       let size = qint params "tile" 64 in
+       let w = max 1 (qint params "workers" workers) in
+       let m = max 1 (qint params "markets" 4) in
+       let noemit _ _ = true in
+       let s0 = Market.run ~vp ~max_iter ~size ~workers:w ~markets:m ~arbitrage:false ~tint:false ~emit:noemit in
+       let s1 = Market.run ~vp ~max_iter ~size ~workers:w ~markets:m ~arbitrage:true ~tint:false ~emit:noemit in
+       respond fd ~status:"200 OK" ~content_type:"application/json"
+         ~body:(json_of_stats ~workers:w ~markets:m s0 s1)
      | _ -> respond fd ~status:"404 Not Found" ~content_type:"text/plain" ~body:"not found"
    with e ->
      (try

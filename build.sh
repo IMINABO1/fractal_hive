@@ -15,12 +15,12 @@ ocamlc -c -I lib lib/mandelbrot.ml
 ocamlc -c -I lib lib/tile.ml
 ocamlc -c -I lib lib/render.ml
 ocamlc -c -I lib lib/auction.ml
-ocamlc -c -I lib lib/hive.ml
+ocamlc -c -I lib -I +unix lib/market.ml
 ocamlc -c -I lib -I +unix lib/server.ml
 ocamlc -c -I lib -I bin bin/main.ml
 
 ocamlc -I +unix -o fractalhive.byte unix.cma \
   lib/viewport.cmo lib/mandelbrot.cmo lib/tile.cmo \
-  lib/render.cmo lib/auction.cmo lib/hive.cmo lib/server.cmo bin/main.cmo
+  lib/render.cmo lib/auction.cmo lib/market.cmo lib/server.cmo bin/main.cmo
 
 echo "built fractalhive.byte  ->  run: ./run.sh --port 8080"
