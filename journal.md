@@ -8,8 +8,8 @@ the most detailed regions (the set's boundary) render first. It mirrors Jane Str
 real-time compute auction on "the hive". Browser `<canvas>` frontend, OCaml backend over
 stdlib `Unix` sockets.
 
-## Why client–server instead of a static image
-A fractal has infinite detail, so zooming means **re-rendering at a new scale** — that needs
+## Why client-server instead of a static image
+A fractal has infinite detail, so zooming means **re-rendering at a new scale** - that needs
 the compute engine in the loop, which a PNG cannot do. A browser canvas + an OCaml tile
 server keeps OCaml as the compute engine and gives real interactivity. Bonus: a backend
 compute service streaming data to a frontend is about the most Jane-Street-shaped
@@ -19,7 +19,7 @@ architecture we could pick.
 A cheap proxy for "how much detail is in this tile." Boundary tiles see wildly different
 escape counts across their corners (high variance); flat interior/exterior tiles see
 near-equal counts (low variance). Sorting tiles by bid descending makes the boundary paint
-first — the auction, made visible. Verified: for the default view the top bids (~8800) all
+first - the auction, made visible. Verified: for the default view the top bids (~8800) all
 sit in the center band where the boundary is.
 
 ## Problem: Smart App Control blocks the OCaml toolchain (solved)
@@ -44,14 +44,14 @@ unwrapped top-level modules. Unwrapping keeps one `bin/main.ml` working for both
 - A live bid-heatmap overlay would make the auction even more legible.
 - Deep-zoom precision (perturbation theory / rebasing) is the interesting hard problem later.
 
-## v2 — parallel auction
+## v2 - parallel auction
 The v1 "auction" was only a sort: one worker, no contention. v2 makes tiles actually compete
 for compute. New `lib/hive.ml` runs the render across N `Domain` workers pulling from one
 shared bid-ordered queue.
 
 Why an atomic cursor instead of a mutex-guarded heap: `Auction.plan` already returns tiles
 sorted by bid, so the "queue" is just that array plus `Atomic.fetch_and_add` on a cursor.
-Claiming the next-highest bid is then lock-free — lower index = higher bid. The only shared
+Claiming the next-highest bid is then lock-free - lower index = higher bid. The only shared
 mutable step is writing the rendered tile to the socket, so a single `Mutex` guards that;
 rendering itself touches disjoint pixels and needs no lock.
 
@@ -62,11 +62,11 @@ tiles as they land, so progressive fill survives.
 
 Cooperative cancellation: `emit` returns false when the socket write fails (client gone),
 which flips a shared `aborted` atomic so workers stop claiming. The frontend drives this with
-an `AbortController` — a new render aborts the old fetch, the socket closes, the server bails.
+an `AbortController` - a new render aborts the old fetch, the socket closes, the server bails.
 Cleaner than v1's render-id guard because it actually frees the server.
 
 Verified on this machine (bytecode, `ocamlrun`): render time 1w=51.7s, 2w=20.5s, 4w=10.1s,
-8w=6.2s (8.3x) on a heavy zoomed view at 400 iters — real multicore scaling. Reconstructed a
+8w=6.2s (8.3x) on a heavy zoomed view at 400 iters - real multicore scaling. Reconstructed a
 streamed frame into a PNG: clean Mandelbrot, no tearing, byte counts exact (pixels + one
 16-byte header per tile), so the concurrent mutex-guarded writes don't interleave.
 
@@ -74,7 +74,7 @@ Decision: keep `/tile` and `/plan` around (the PNG-preview tooling uses `/tile`)
 now uses `/render`. `--workers` sets the server default; `?workers=` overrides per request, and
 the `[`/`]` keys change it live so the speedup is something you can feel.
 
-## v2.5 — UX polish
+## v2.5 - UX polish
 Loader + done indicator (determinate progress bar over the known tile total + a braille
 spinner + a `✓ N tiles · X ms` line), a visible workers slider (mirrors the `[`/`]` keys), and
 **auto-iterations**: the client scales `max_iter` up with zoom depth
@@ -88,26 +88,26 @@ forever, and untangling it is worth remembering:
 - **A single frame is finite and always terminates.** Fixed box + fixed pixel resolution = a
   fixed pixel count, and each pixel runs the escape loop *at most* `max_iter` times. That cap
   IS the deterministic stopping point. Points in the black interior never escape, so they're
-  the expensive ones — they always run the full `max_iter` before we give up and call them
+  the expensive ones - they always run the full `max_iter` before we give up and call them
   black. No cap would mean they loop forever; the cap is what guarantees termination.
 - **The infinite detail lives only across zoom levels.** You can keep zooming forever and
   always find new structure (those "infinitely minute black spaces"), but each individual zoom
   is still one finite frame. The infinity is in the *sequence* of zooms, not inside any frame.
 
 That's the whole reason auto-iterations exists: deeper zoom needs a higher cap or the fine
-black filaments blur into blobs — but every frame still finishes. Pixel size (resolution) sets
+black filaments blur into blobs - but every frame still finishes. Pixel size (resolution) sets
 how much of that detail you can even sample; below ~1e-14 scale `float` precision, not
 iterations, is what finally kills the zoom.
 
-## v2.6 — controlled zoom
+## v2.6 - controlled zoom
 Trackpad users (no mouse) kept over-zooming: the wheel handler applied a fixed 0.8x/1.25x step
-*per event*, and a trackpad fires many events per gesture. Fixed both ends — added explicit
+*per event*, and a trackpad fires many events per gesture. Fixed both ends - added explicit
 + / - / reset buttons (and `+`/`-`/`0` keys) that zoom in deliberate steps about the canvas
 center, and made the wheel proportional to `deltaY` (`Math.pow(1.0015, deltaY)`) so a small
-scroll is a small zoom. Refactored the shared math into `zoomAt(mx, my, factor)` — buttons pass
+scroll is a small zoom. Refactored the shared math into `zoomAt(mx, my, factor)` - buttons pass
 the center, the wheel passes the cursor. Frontend-only; no server change.
 
-## v3 — sharded markets + arbitrage (the headline result)
+## v3 - sharded markets + arbitrage (the headline result)
 Generalized `hive.ml` into `lib/market.ml` and deleted hive (markets=1 reproduces it). The
 image splits into k markets (vertical bands), each a bid-sorted queue + atomic cursor; workers
 have a home market (`home = id mod k`). Siloed: a worker serves only its home, then idles.
@@ -116,13 +116,13 @@ the auction. Per-worker render time is recorded (each worker writes only its own
 `/stats` can run both modes and return utilization; the browser draws the two as bar rows.
 
 The measured result (markets=4, workers=8, default view, 300 iters):
-- **siloed** 3661 ms, mean utilization ~35% — two workers pinned near 100% on the boundary
+- **siloed** 3661 ms, mean utilization ~35% - two workers pinned near 100% on the boundary
   bands while others sat at ~5% (their light bands drained and they idled).
-- **arbitrage** 1499 ms, mean utilization ~88% — every worker 80–99%.
+- **arbitrage** 1499 ms, mean utilization ~88% - every worker 80-99%.
 - **2.44x faster** purely from letting idle workers cross market lines.
 
 That's the whole thesis, empirically: siloed compute wastes cycles, and arbitrage (a global
-auction) recovers them — which is exactly why Jane Street runs one global auction on the hive
+auction) recovers them - which is exactly why Jane Street runs one global auction on the hive
 instead of per-desk clusters. `tint` blends a per-market hue into tiles so the k bands are
 visible in the render.
 
