@@ -107,7 +107,25 @@ center, and made the wheel proportional to `deltaY` (`Math.pow(1.0015, deltaY)`)
 scroll is a small zoom. Refactored the shared math into `zoomAt(mx, my, factor)` — buttons pass
 the center, the wheel passes the cursor. Frontend-only; no server change.
 
-## Next (v3, the multi-market idea)
-Shard the image into k markets, each a queue + worker pool in parallel, then add cross-market
-work-stealing = arbitrage, and instrument per-worker utilization to show why one global auction
-beats siloed ones. `hive.ml` (atomic-cursor queue + domain workers) is the reusable unit.
+## v3 — sharded markets + arbitrage (the headline result)
+Generalized `hive.ml` into `lib/market.ml` and deleted hive (markets=1 reproduces it). The
+image splits into k markets (vertical bands), each a bid-sorted queue + atomic cursor; workers
+have a home market (`home = id mod k`). Siloed: a worker serves only its home, then idles.
+Arbitrage: a drained worker steals the highest-front-bid tile from any market, re-globalizing
+the auction. Per-worker render time is recorded (each worker writes only its own slot) so
+`/stats` can run both modes and return utilization; the browser draws the two as bar rows.
+
+The measured result (markets=4, workers=8, default view, 300 iters):
+- **siloed** 3661 ms, mean utilization ~35% — two workers pinned near 100% on the boundary
+  bands while others sat at ~5% (their light bands drained and they idled).
+- **arbitrage** 1499 ms, mean utilization ~88% — every worker 80–99%.
+- **2.44x faster** purely from letting idle workers cross market lines.
+
+That's the whole thesis, empirically: siloed compute wastes cycles, and arbitrage (a global
+auction) recovers them — which is exactly why Jane Street runs one global auction on the hive
+instead of per-desk clusters. `tint` blends a per-market hue into tiles so the k bands are
+visible in the render.
+
+## Next (v4, optional)
+Persistent domain pool (kill the per-request spawn/join), a live per-market utilization overlay
+during a render, and deep-zoom precision (perturbation/rebasing) past the float floor.

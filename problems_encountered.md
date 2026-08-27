@@ -51,3 +51,22 @@ Problems we hit and problems we fear. No solutions here — solutions live in `j
   bytecode-only machine there's no native speed to fall back on.
 - The progress bar's total is computed client-side as `ceil(W/TILE)*ceil(H/TILE)`; if the tile
   size or dimensions ever diverge between client and server the bar would over/under-fill.
+
+## v3
+### Hit
+- Siloed mode with fewer workers than markets would strand tiles: a market with no home worker
+  never drains (its tiles never render). Clamped `k = min(markets, workers)` so every market
+  has at least one home worker. The frontend still offers markets up to 8, so on <8 workers the
+  server silently clamps — the UI can disagree with the actual k used.
+
+### Feared (no fix planned yet)
+- Bytecode timing is noisy; the siloed-vs-arbitrage gap is only clear on a heavy-enough view
+  where render dominates the jitter. On a trivial view both modes finish in ~ms and the graph
+  is meaningless.
+- `/stats` renders the whole frame twice (once per mode) with no pixel output — pure benchmark
+  cost, and it blocks the serial accept loop for its duration.
+- Vertical-band partition means the imbalance (and thus the arbitrage win) depends on where the
+  boundary sits relative to the bands; some views show almost no gap.
+- `market_of` is recomputed for tinting instead of being carried alongside the tile — cheap, but
+  a tile that sits exactly on a band edge could tint under a different market than it was queued
+  in (integer division rounding). Cosmetic only.
