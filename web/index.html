@@ -18,7 +18,7 @@
     <canvas id="c" width="800" height="600"></canvas>
     <div id="hud"></div>
   </div>
-  <p id="help">drag to pan &middot; scroll to zoom &middot; tiles arrive highest-bid first (boundary before flat)</p>
+  <p id="help">drag to pan &middot; scroll to zoom &middot; <b>[</b> / <b>]</b> fewer/more workers &middot; tiles arrive highest-bid first, rendered in parallel</p>
 <script>
 const W = 800, H = 600, TILE = 64;
 const canvas = document.getElementById('c');
@@ -26,33 +26,63 @@ const ctx = canvas.getContext('2d');
 const hud = document.getElementById('hud');
 
 let view = { cx: -0.5, cy: 0.0, scale: 0.005 };
-let renderId = 0; // bumps on each new render so stale loops can bail
+let workers = 4;
+let inFlight = null; // AbortController for the current render
 
 function qs(extra) {
   const p = { cx: view.cx, cy: view.cy, scale: view.scale, w: W, h: H, ...extra };
   return Object.entries(p).map(([k, v]) => k + '=' + v).join('&');
 }
 
-function setHud(done, total) {
+function setHud(tiles, ms) {
   hud.textContent =
     `center (${view.cx.toFixed(6)}, ${view.cy.toFixed(6)})\n` +
     `scale  ${view.scale.toExponential(2)} /px\n` +
-    `tiles  ${done}/${total}`;
+    `workers ${workers}   tiles ${tiles}\n` +
+    `render  ${ms == null ? '…' : ms.toFixed(0) + ' ms'}`;
 }
 
+// Ask the server to render the whole viewport in parallel; it streams framed
+// tiles (16-byte header of x0,y0,x1,y1 as little-endian int32, then RGBA) which
+// we paint as they arrive. A new render aborts the old one -> the socket closes
+// -> the server's workers stop (cooperative cancellation).
 async function render() {
-  const myId = ++renderId;
-  const plan = await (await fetch('/plan?' + qs({ tile: TILE }))).json();
-  setHud(0, plan.length);
-  let done = 0;
-  for (const t of plan) {
-    if (myId !== renderId) return; // a newer render superseded us
-    const buf = await (await fetch('/tile?' + qs({ x0: t.x0, y0: t.y0, x1: t.x1, y1: t.y1 }))).arrayBuffer();
-    const tw = t.x1 - t.x0, th = t.y1 - t.y0;
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), tw, th), t.x0, t.y0);
-    setHud(++done, plan.length);
-  }
+  if (inFlight) inFlight.abort();
+  inFlight = new AbortController();
+  const t0 = performance.now();
+  let res;
+  try {
+    res = await fetch('/render?' + qs({ tile: TILE, workers }), { signal: inFlight.signal });
+  } catch { return; }
+  const reader = res.body.getReader();
+  let buf = new Uint8Array(0), tiles = 0;
+  setHud(0, null);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const next = new Uint8Array(buf.length + value.length);
+      next.set(buf); next.set(value, buf.length); buf = next;
+      while (buf.length >= 16) {
+        const dv = new DataView(buf.buffer, buf.byteOffset, 16);
+        const x0 = dv.getInt32(0, true), y0 = dv.getInt32(4, true);
+        const x1 = dv.getInt32(8, true), y1 = dv.getInt32(12, true);
+        const tw = x1 - x0, th = y1 - y0, need = 16 + tw * th * 4;
+        if (buf.length < need) break;
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(buf.subarray(16, need)), tw, th), x0, y0);
+        buf = buf.subarray(need);
+        setHud(++tiles, performance.now() - t0);
+      }
+    }
+  } catch { return; }
+  setHud(tiles, performance.now() - t0);
 }
+
+// [ / ] change the worker count live, so you can watch render time move.
+window.addEventListener('keydown', e => {
+  if (e.key === '[') { workers = Math.max(1, workers - 1); render(); }
+  else if (e.key === ']') { workers = Math.min(16, workers + 1); render(); }
+});
 
 // Pan: track the drag in screen pixels, shift the center on release.
 let drag = null;

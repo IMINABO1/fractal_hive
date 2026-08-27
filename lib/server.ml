@@ -108,7 +108,35 @@ let json_of_plan planned =
   Buffer.add_char buf ']';
   Buffer.contents buf
 
-let handle_conn ~webroot ~max_iter fd =
+(* Stream a whole viewport, one framed tile at a time, rendered in parallel by
+   Hive. No Content-Length: the stream ends when the connection closes. Rendering
+   runs across N domains; the socket write is the only shared step, so a Mutex
+   serializes it. A failed write means the client left -> emit returns false and
+   Hive stops. Frame = 16-byte header (x0,y0,x1,y1 as little-endian int32) + RGBA. *)
+let write_render fd ~max_iter ~vp ~size ~workers =
+  send_all fd
+    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n";
+  let mtx = Mutex.create () in
+  let emit (t : Tile.t) bytes =
+    let hdr = Bytes.create 16 in
+    Bytes.set_int32_le hdr 0 (Int32.of_int t.x0);
+    Bytes.set_int32_le hdr 4 (Int32.of_int t.y0);
+    Bytes.set_int32_le hdr 8 (Int32.of_int t.x1);
+    Bytes.set_int32_le hdr 12 (Int32.of_int t.y1);
+    Mutex.lock mtx;
+    let ok =
+      try
+        send_all fd (Bytes.to_string hdr);
+        send_all fd (Bytes.to_string bytes);
+        true
+      with _ -> false
+    in
+    Mutex.unlock mtx;
+    ok
+  in
+  Hive.render ~vp ~max_iter ~size ~workers ~emit
+
+let handle_conn ~webroot ~max_iter ~workers fd =
   (try
      let params_of req = parse_query (snd (split_query (request_target req))) in
      let path_of req = fst (split_query (request_target req)) in
@@ -129,6 +157,11 @@ let handle_conn ~webroot ~max_iter fd =
        let bytes = Render.render_tile ~vp ~max_iter (tile_of_params params) in
        respond fd ~status:"200 OK" ~content_type:"application/octet-stream"
          ~body:(Bytes.to_string bytes)
+     | "/render" ->
+       let vp = viewport_of_params params in
+       write_render fd ~max_iter ~vp
+         ~size:(qint params "tile" 64)
+         ~workers:(max 1 (qint params "workers" workers))
      | _ -> respond fd ~status:"404 Not Found" ~content_type:"text/plain" ~body:"not found"
    with e ->
      (try
@@ -137,14 +170,15 @@ let handle_conn ~webroot ~max_iter fd =
       with _ -> ()));
   (try Unix.close fd with _ -> ())
 
-let start ~port ~webroot ~max_iter =
+let start ~port ~webroot ~max_iter ~workers =
   let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   Unix.setsockopt sock Unix.SO_REUSEADDR true;
   Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_loopback, port));
   Unix.listen sock 16;
-  Printf.printf "FractalHive listening on http://localhost:%d  (webroot=%s, iters=%d)\n%!"
-    port webroot max_iter;
+  Printf.printf
+    "FractalHive listening on http://localhost:%d  (webroot=%s, iters=%d, workers=%d)\n%!"
+    port webroot max_iter workers;
   while true do
     let fd, _ = Unix.accept sock in
-    handle_conn ~webroot ~max_iter fd
+    handle_conn ~webroot ~max_iter ~workers fd
   done
