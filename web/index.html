@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FractalHive</title>
+<style>
+  body { margin: 0; background: #0b0b0f; color: #cfcfe0; font-family: ui-monospace, monospace; }
+  #wrap { position: relative; width: 800px; margin: 16px auto; }
+  #c { display: block; cursor: grab; background: #000; border: 1px solid #222; }
+  #c:active { cursor: grabbing; }
+  #hud { position: absolute; top: 8px; left: 8px; padding: 6px 8px;
+         background: rgba(0,0,0,.55); font-size: 12px; line-height: 1.4; white-space: pre; }
+  #help { width: 800px; margin: 0 auto; font-size: 12px; color: #7a7a90; }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="c" width="800" height="600"></canvas>
+    <div id="hud"></div>
+  </div>
+  <p id="help">drag to pan &middot; scroll to zoom &middot; tiles arrive highest-bid first (boundary before flat)</p>
+<script>
+const W = 800, H = 600, TILE = 64;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+
+let view = { cx: -0.5, cy: 0.0, scale: 0.005 };
+let renderId = 0; // bumps on each new render so stale loops can bail
+
+function qs(extra) {
+  const p = { cx: view.cx, cy: view.cy, scale: view.scale, w: W, h: H, ...extra };
+  return Object.entries(p).map(([k, v]) => k + '=' + v).join('&');
+}
+
+function setHud(done, total) {
+  hud.textContent =
+    `center (${view.cx.toFixed(6)}, ${view.cy.toFixed(6)})\n` +
+    `scale  ${view.scale.toExponential(2)} /px\n` +
+    `tiles  ${done}/${total}`;
+}
+
+async function render() {
+  const myId = ++renderId;
+  const plan = await (await fetch('/plan?' + qs({ tile: TILE }))).json();
+  setHud(0, plan.length);
+  let done = 0;
+  for (const t of plan) {
+    if (myId !== renderId) return; // a newer render superseded us
+    const buf = await (await fetch('/tile?' + qs({ x0: t.x0, y0: t.y0, x1: t.x1, y1: t.y1 }))).arrayBuffer();
+    const tw = t.x1 - t.x0, th = t.y1 - t.y0;
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), tw, th), t.x0, t.y0);
+    setHud(++done, plan.length);
+  }
+}
+
+// Pan: track the drag in screen pixels, shift the center on release.
+let drag = null;
+canvas.addEventListener('mousedown', e => { drag = { x: e.clientX, y: e.clientY }; });
+window.addEventListener('mouseup', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag = null;
+  if (dx === 0 && dy === 0) return;
+  view.cx -= dx * view.scale;
+  view.cy += dy * view.scale;
+  render();
+});
+
+// Zoom about the cursor: keep the complex point under the mouse fixed.
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 0.8 : 1.25;
+  const mx = e.offsetX, my = e.offsetY;
+  const re = view.cx + (mx - W / 2) * view.scale;
+  const im = view.cy - (my - H / 2) * view.scale;
+  view.scale *= factor;
+  view.cx = re - (mx - W / 2) * view.scale;
+  view.cy = im + (my - H / 2) * view.scale;
+  render();
+}, { passive: false });
+
+render();
+</script>
+</body>
+</html>
