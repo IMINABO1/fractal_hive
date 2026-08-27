@@ -99,6 +99,14 @@ black filaments blur into blobs — but every frame still finishes. Pixel size (
 how much of that detail you can even sample; below ~1e-14 scale `float` precision, not
 iterations, is what finally kills the zoom.
 
+## v2.6 — controlled zoom
+Trackpad users (no mouse) kept over-zooming: the wheel handler applied a fixed 0.8x/1.25x step
+*per event*, and a trackpad fires many events per gesture. Fixed both ends — added explicit
++ / - / reset buttons (and `+`/`-`/`0` keys) that zoom in deliberate steps about the canvas
+center, and made the wheel proportional to `deltaY` (`Math.pow(1.0015, deltaY)`) so a small
+scroll is a small zoom. Refactored the shared math into `zoomAt(mx, my, factor)` — buttons pass
+the center, the wheel passes the cursor. Frontend-only; no server change.
+
 ## Next (v3, the multi-market idea)
 Shard the image into k markets, each a queue + worker pool in parallel, then add cross-market
 work-stealing = arbitrage, and instrument per-worker utilization to show why one global auction
