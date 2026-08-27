@@ -126,6 +126,31 @@ auction) recovers them, which is exactly why Jane Street runs one global auction
 instead of per desk clusters. `tint` blends a per market hue into tiles so the k bands are
 visible in the render.
 
+## v3.1 partition fairness (honest reckoning)
+Expert feedback flagged the v3 headline: vertical **bands** are near the worst partition for the
+Mandelbrot, since the centered set jams the boundary into a couple of bands and the outer bands
+drain instantly. So the 2.x win was partly measuring a rigged partition. Added a **strided**
+partition (`col mod k`, interleaving columns so each market gets a mix of hot and cold tiles) and
+made `/stats` benchmark all four configs (band/strided x siloed/arbitrage).
+
+Measured (markets=4, workers=8, default view, 300 iters, medians of 3 warm runs):
+- **band**: siloed ~1640 ms / 35% util, arbitrage ~750 ms / 91% util -> **2.2x**.
+- **strided**: siloed ~790 ms / 84% util, arbitrage ~755 ms / 90% util -> **1.05x**.
+
+What this actually says, and it's a better story than the raw 2.2x:
+1. Fair partitioning alone recovers most of the waste (siloed util 35% -> 84%, wall halved) with
+   zero coordination. The big arbitrage win on bands was mostly fixing a bad partition.
+2. On a fair partition arbitrage adds only ~5%.
+3. Arbitrage makes wall time nearly partition independent: band arbitrage ~750 ms ~= strided arbitrage
+   ~755 ms. It's the robustness layer, and it matters exactly when demand is lumpy and you can't
+   partition evenly ahead of time (the realistic trading desk case). That is the honest defense
+   of a global auction over silos.
+
+Caveats: single run per config, so a noisy run can misrank close numbers; medians by hand for the
+docs, not in code. Note also the original v3 "siloed 3661 ms" figure above was a cold first run;
+warm runs settle around 1640 ms, which is why bare single numbers are worth distrusting.
+
 ## Next (v4, optional)
 Persistent domain pool (kill the per request spawn/join), a live per market utilization overlay
-during a render, and deep zoom precision (perturbation/rebasing) past the float floor.
+during a render, and deep zoom precision (perturbation/rebasing) past the float floor. Medians in
+code (report min/median/max) would close the measurement rigor gap.

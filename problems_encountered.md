@@ -70,3 +70,16 @@ Problems we hit and problems we fear. No solutions here; solutions live in `jour
 - `market_of` is recomputed for tinting instead of being carried alongside the tile; cheap, but
   a tile that sits exactly on a band edge could tint under a different market than it was queued
   in (integer division rounding). Cosmetic only.
+
+## v3.1
+### Feared (no fix planned yet)
+- `/stats` now runs four renders per click (band/strided x siloed/arbitrage), so it costs twice
+  what it did and blocks the serial accept loop that much longer.
+- Numbers are still single runs per config. A noisy run can misrank the close ones (strided
+  siloed vs arbitrage differ by only ~5%); medians in code are deferred to v4.
+- `strided` interleaves on columns only (`col mod k`). A full checkerboard `(col+row) mod k` would
+  mix in both axes and might balance slightly better; not measured.
+- The bid measures a tile's *value* (boundary detail), not its *cost*. Deep interior tiles run the
+  full `max_iter` yet bid ~0, so the most expensive tile can be the lowest bidder. Fine for the
+  auction analogy (you bid what compute is worth), a real inefficiency for makespan scheduling
+  (which wants longest job first). Not addressed.
