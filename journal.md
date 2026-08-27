@@ -41,7 +41,40 @@ wrapped namespace would be `Fractalhive.Server`, but the manual bytecode build p
 unwrapped top-level modules. Unwrapping keeps one `bin/main.ml` working for both.
 
 ## Thoughts / next
-- v2: real parallel tile rendering with OCaml 5 `Domain`s pulling from a shared priority
-  queue — turns the serial fill into a genuine parallel auction.
 - A live bid-heatmap overlay would make the auction even more legible.
 - Deep-zoom precision (perturbation theory / rebasing) is the interesting hard problem later.
+
+## v2 — parallel auction
+The v1 "auction" was only a sort: one worker, no contention. v2 makes tiles actually compete
+for compute. New `lib/hive.ml` runs the render across N `Domain` workers pulling from one
+shared bid-ordered queue.
+
+Why an atomic cursor instead of a mutex-guarded heap: `Auction.plan` already returns tiles
+sorted by bid, so the "queue" is just that array plus `Atomic.fetch_and_add` on a cursor.
+Claiming the next-highest bid is then lock-free — lower index = higher bid. The only shared
+mutable step is writing the rendered tile to the socket, so a single `Mutex` guards that;
+rendering itself touches disjoint pixels and needs no lock.
+
+Server-side, not client-side: the compute is the "hive", so parallelism belongs on the
+server. A new `/render` endpoint streams framed tiles (16-byte header x0,y0,x1,y1 int32-LE +
+RGBA, no Content-Length, ends on connection close). The browser reads the stream and paints
+tiles as they land, so progressive fill survives.
+
+Cooperative cancellation: `emit` returns false when the socket write fails (client gone),
+which flips a shared `aborted` atomic so workers stop claiming. The frontend drives this with
+an `AbortController` — a new render aborts the old fetch, the socket closes, the server bails.
+Cleaner than v1's render-id guard because it actually frees the server.
+
+Verified on this machine (bytecode, `ocamlrun`): render time 1w=51.7s, 2w=20.5s, 4w=10.1s,
+8w=6.2s (8.3x) on a heavy zoomed view at 400 iters — real multicore scaling. Reconstructed a
+streamed frame into a PNG: clean Mandelbrot, no tearing, byte counts exact (pixels + one
+16-byte header per tile), so the concurrent mutex-guarded writes don't interleave.
+
+Decision: keep `/tile` and `/plan` around (the PNG-preview tooling uses `/tile`); the browser
+now uses `/render`. `--workers` sets the server default; `?workers=` overrides per request, and
+the `[`/`]` keys change it live so the speedup is something you can feel.
+
+## Next (v3, the multi-market idea)
+Shard the image into k markets, each a queue + worker pool in parallel, then add cross-market
+work-stealing = arbitrage, and instrument per-worker utilization to show why one global auction
+beats siloed ones. `hive.ml` (atomic-cursor queue + domain workers) is the reusable unit.
