@@ -159,7 +159,9 @@ let handle_conn ~webroot ~max_iter ~workers fd =
          ~body:(Bytes.to_string bytes)
      | "/render" ->
        let vp = viewport_of_params params in
-       write_render fd ~max_iter ~vp
+       write_render fd
+         ~max_iter:(max 1 (qint params "iters" max_iter))
+         ~vp
          ~size:(qint params "tile" 64)
          ~workers:(max 1 (qint params "workers" workers))
      | _ -> respond fd ~status:"404 Not Found" ~content_type:"text/plain" ~body:"not found"

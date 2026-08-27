@@ -11,6 +11,14 @@
   #hud { position: absolute; top: 8px; left: 8px; padding: 6px 8px;
          background: rgba(0,0,0,.55); font-size: 12px; line-height: 1.4; white-space: pre; }
   #help { width: 800px; margin: 0 auto; font-size: 12px; color: #7a7a90; }
+  #panel { width: 800px; margin: 8px auto; display: flex; align-items: center; gap: 12px;
+           font-size: 12px; color: #b9b9cc; }
+  #panel input[type=range] { width: 160px; }
+  #status { min-width: 190px; white-space: pre; }
+  #spinner { display: inline-block; width: 1ch; color: #7fb0e0; }
+  #barwrap { flex: 1; height: 6px; background: #1a1a22; border-radius: 3px; overflow: hidden; }
+  #bar { height: 100%; width: 0; background: #3b6ea5; transition: width .08s linear; }
+  #bar.done { background: #4a9a5a; }
 </style>
 </head>
 <body>
@@ -18,16 +26,36 @@
     <canvas id="c" width="800" height="600"></canvas>
     <div id="hud"></div>
   </div>
-  <p id="help">drag to pan &middot; scroll to zoom &middot; <b>[</b> / <b>]</b> fewer/more workers &middot; tiles arrive highest-bid first, rendered in parallel</p>
+  <div id="panel">
+    <label>workers <b id="wval">4</b></label>
+    <input id="wslider" type="range" min="1" max="16" value="4">
+    <div id="status"><span id="spinner"></span> <span id="stext">idle</span></div>
+    <div id="barwrap"><div id="bar"></div></div>
+  </div>
+  <p id="help">drag to pan &middot; scroll to zoom &middot; <b>[</b>/<b>]</b> or the slider = workers &middot; iterations auto-scale with zoom</p>
 <script>
 const W = 800, H = 600, TILE = 64;
+const TOTAL = Math.ceil(W / TILE) * Math.ceil(H / TILE);
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const hud = document.getElementById('hud');
+const bar = document.getElementById('bar');
+const spinner = document.getElementById('spinner');
+const stext = document.getElementById('stext');
+const wslider = document.getElementById('wslider');
+const wval = document.getElementById('wval');
 
 let view = { cx: -0.5, cy: 0.0, scale: 0.005 };
 let workers = 4;
+let curIters = 200;
 let inFlight = null; // AbortController for the current render
+
+// max_iter must climb as we zoom in or deep boundary filaments go blobby. Each
+// render is still finite -- this only sets how hard we look at each pixel.
+function autoIters() {
+  const z = Math.log2(0.005 / view.scale);
+  return Math.min(4000, Math.max(200, Math.round(200 + 40 * Math.max(0, z))));
+}
 
 function qs(extra) {
   const p = { cx: view.cx, cy: view.cy, scale: view.scale, w: W, h: H, ...extra };
@@ -38,8 +66,24 @@ function setHud(tiles, ms) {
   hud.textContent =
     `center (${view.cx.toFixed(6)}, ${view.cy.toFixed(6)})\n` +
     `scale  ${view.scale.toExponential(2)} /px\n` +
-    `workers ${workers}   tiles ${tiles}\n` +
-    `render  ${ms == null ? '…' : ms.toFixed(0) + ' ms'}`;
+    `workers ${workers}   iters ${curIters}\n` +
+    `tiles ${tiles}/${TOTAL}   render ${ms == null ? '…' : ms.toFixed(0) + ' ms'}`;
+}
+
+let spinTimer = null, spinFrame = 0;
+const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+function startLoad() {
+  bar.classList.remove('done');
+  bar.style.width = '0%';
+  stext.textContent = 'rendering';
+  if (!spinTimer) spinTimer = setInterval(() => {
+    spinner.textContent = SPIN[spinFrame = (spinFrame + 1) % SPIN.length];
+  }, 80);
+}
+function stopLoad(msg) {
+  clearInterval(spinTimer); spinTimer = null;
+  spinner.textContent = '';
+  stext.textContent = msg;
 }
 
 // Ask the server to render the whole viewport in parallel; it streams framed
@@ -49,10 +93,13 @@ function setHud(tiles, ms) {
 async function render() {
   if (inFlight) inFlight.abort();
   inFlight = new AbortController();
+  const me = inFlight;
+  curIters = autoIters();
+  startLoad();
   const t0 = performance.now();
   let res;
   try {
-    res = await fetch('/render?' + qs({ tile: TILE, workers }), { signal: inFlight.signal });
+    res = await fetch('/render?' + qs({ tile: TILE, workers, iters: curIters }), { signal: me.signal });
   } catch { return; }
   const reader = res.body.getReader();
   let buf = new Uint8Array(0), tiles = 0;
@@ -61,6 +108,7 @@ async function render() {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (inFlight !== me) return; // superseded by a newer render
       const next = new Uint8Array(buf.length + value.length);
       next.set(buf); next.set(value, buf.length); buf = next;
       while (buf.length >= 16) {
@@ -71,17 +119,32 @@ async function render() {
         if (buf.length < need) break;
         ctx.putImageData(new ImageData(new Uint8ClampedArray(buf.subarray(16, need)), tw, th), x0, y0);
         buf = buf.subarray(need);
-        setHud(++tiles, performance.now() - t0);
+        tiles++;
+        bar.style.width = (tiles / TOTAL * 100) + '%';
+        setHud(tiles, performance.now() - t0);
       }
     }
   } catch { return; }
-  setHud(tiles, performance.now() - t0);
+  if (inFlight !== me) return;
+  const ms = performance.now() - t0;
+  bar.style.width = '100%';
+  bar.classList.add('done');
+  stopLoad(`✓ ${tiles} tiles · ${ms.toFixed(0)} ms`);
+  setHud(tiles, ms);
 }
+
+function setWorkers(n) {
+  workers = Math.max(1, Math.min(16, n));
+  wslider.value = workers;
+  wval.textContent = workers;
+}
+
+wslider.addEventListener('input', () => { setWorkers(+wslider.value); render(); });
 
 // [ / ] change the worker count live, so you can watch render time move.
 window.addEventListener('keydown', e => {
-  if (e.key === '[') { workers = Math.max(1, workers - 1); render(); }
-  else if (e.key === ']') { workers = Math.min(16, workers + 1); render(); }
+  if (e.key === '[') { setWorkers(workers - 1); render(); }
+  else if (e.key === ']') { setWorkers(workers + 1); render(); }
 });
 
 // Pan: track the drag in screen pixels, shift the center on release.
