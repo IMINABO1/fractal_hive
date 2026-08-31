@@ -17,6 +17,13 @@ FractalHive treats each tile as a **bidder**. A tile bids the variance of the es
 its corners and center: high variance means it straddles the boundary (lots of detail), so it
 bids high and renders first. Workers are the scarce resource; the highest bidders win them.
 
+One honest wrinkle: the bid measures a tile's *value* (detail), not its *cost* (compute), and the
+two diverge in one spot. A tile of solid interior black runs every pixel to `max_iter` before
+giving up, so it is the most expensive tile on the board yet has near zero variance and bids near
+nothing. For the auction that is *correct*, you bid what compute is worth, not what it costs. For
+pure makespan scheduling it is a real inefficiency, since longest-job-first would render that
+black tile early. It is the first thing worth saying out loud about the design.
+
 Zoom in and you *watch* the boundary sharpen before the flat regions fill: the auction, made
 visible.
 
@@ -113,5 +120,9 @@ No external libraries, just OCaml's `Complex`, `Unix`, `Domain`, `Atomic`, and `
 - **v2**: N parallel `Domain` workers pulling from one shared bid queue (measured up to 8.3×).
 - **v2.5 / v2.6**: loader, live worker control, zoom that auto scales iterations, zoom buttons.
 - **v3**: sharded markets + work stealing arbitrage + the utilization benchmark above.
+- **v4** *(measured, not shipped)*: built a persistent domain pool to kill the per request
+  spawn/join, then measured it head to head. In OCaml 5 a `Domain.spawn` is too cheap to matter
+  against a compute bound render, so the pool was a net wash to ~3% slower and got reverted. The
+  bottleneck is the Mandelbrot math in bytecode, not domain lifecycle.
 
 See `journal.md` for the design decisions and `problems_encountered.md` for the sharp edges.

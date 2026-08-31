@@ -35,8 +35,11 @@ Problems we hit and problems we fear. No solutions here; solutions live in `jour
 - Serial accept loop: the server handles one connection at a time, so a new request is not
   accepted until the current render's workers stop. The browser's abort (socket close, then
   cooperative stop) covers the interactive case, but two tabs or a stray curl still queue.
-- `Domain.spawn` per `/render` call (a fresh pool each request) costs a few ms of spawn/join
-  overhead. Negligible now; a persistent domain pool is the real fix (v3).
+- `Domain.spawn` per `/render` call (a fresh pool each request) was assumed to cost a few ms of
+  spawn/join overhead. v4 built a persistent domain pool to remove it and measured head to head:
+  no win (a net wash to ~3% slower, since the barrier wakeup costs as much as the cheap spawn it
+  replaced), so the pool was reverted. The bottleneck is the bytecode Mandelbrot compute, not
+  domain lifecycle. See journal.md "v4 attempt".
 - Streaming has no `Content-Length` and relies on `Connection: close` to signal the end. Any
   intermediary that buffers the response would defeat progressive fill (fine on localhost).
 - The frontend recopies the whole stream buffer on every chunk (`new Uint8Array` + `set`);

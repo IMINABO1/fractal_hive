@@ -66,7 +66,11 @@ an `AbortController`: a new render aborts the old fetch, the socket closes, the 
 Cleaner than v1's render id guard because it actually frees the server.
 
 Verified on this machine (bytecode, `ocamlrun`): render time 1w=51.7s, 2w=20.5s, 4w=10.1s,
-8w=6.2s (8.3x) on a heavy zoomed view at 400 iters, real multicore scaling. Reconstructed a
+8w=6.2s (8.3x) on a heavy zoomed view at 400 iters, real multicore scaling. The box is an AMD
+Ryzen 9 270, 8 physical cores / 16 logical threads, so 8 workers sit on 8 real cores (not
+4-cores-with-SMT), and the speedup is physically available. The mild superlinearity (8.3x on 8)
+is the working set warming into per core cache across the run, plus measurement noise on single
+runs, not oversubscription. Reconstructed a
 streamed frame into a PNG: clean Mandelbrot, no tearing, byte counts exact (pixels + one
 16 byte header per tile), so the concurrent mutex guarded writes don't interleave.
 
@@ -150,7 +154,33 @@ Caveats: single run per config, so a noisy run can misrank close numbers; median
 docs, not in code. Note also the original v3 "siloed 3661 ms" figure above was a cold first run;
 warm runs settle around 1640 ms, which is why bare single numbers are worth distrusting.
 
-## Next (v4, optional)
-Persistent domain pool (kill the per request spawn/join), a live per market utilization overlay
-during a render, and deep zoom precision (perturbation/rebasing) past the float floor. Medians in
-code (report min/median/max) would close the measurement rigor gap.
+## v4 attempt: persistent domain pool (measured, reverted)
+Feedback (and problems_encountered) guessed the per request `Domain.spawn`/`join` was eating a
+measurable slice of render latency, so I built a persistent pool: spawn the worker domains once
+at startup, park them, and hand each render a per worker function via a generation counter barrier
+(stdlib `Mutex` + `Condition`, single job at a time since the accept loop is serial). It built,
+rendered byte identical output, and passed the utilization benchmark.
+
+Then I measured it head to head against spawn/join on the same machine and bytecode harness,
+interleaving the two servers to cancel drift (medians):
+
+| Workload | spawn/join | persistent pool | delta |
+|----------|-----------:|----------------:|------:|
+| heavy `/render` (iters=300, ~2.2 s) | 2.206 s | 2.274 s | pool ~3% **slower** (4/5 pairs) |
+| `/stats` (4 internal renders, ~10 s) | ~10.36 s | ~10.6 s | wash / marginally slower |
+| cheap `/render` (iters=25, ~0.6 s) | 0.617 s | 0.611 s | statistical wash |
+
+The premise was wrong. In OCaml 5.5 a `Domain.spawn` is cheap enough that 8 of them vanish into
+the noise of a compute bound render; the pool replaces that with a condition variable barrier
+wakeup that costs about the same or a hair more, so it is a net wash to slight regression, not a
+win. (Sizing the pool to the machine's 16 recommended domains made it clearly worse than sizing
+to the 8 actually used, which pins the cost on live domain bookkeeping / GC coordination, not on
+spawn latency.) So I reverted the pool. The negative result is the point: the bottleneck is the
+Mandelbrot compute in bytecode, not domain lifecycle, and only a native build or fewer iterations
+moves the headline number.
+
+## Next (v5, optional)
+A live per market utilization overlay during a render, deep zoom precision (perturbation/rebasing)
+past the float floor, and medians in code (report min/median/max) to close the measurement rigor
+gap. A persistent pool would only start to pay off if the accept loop went concurrent (many
+overlapping renders), which it is not today.
